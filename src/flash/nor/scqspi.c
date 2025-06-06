@@ -745,6 +745,284 @@ static int qspi_erase_sector(struct flash_bank *bank, unsigned int sector) {
   return retval;
 }
 
+static int verify_config_register(struct target *target, uint32_t base,
+                                  uint32_t spi_ss, size_t exp_size,
+                                  uint32_t *exp_val) {
+  int retval = ERROR_OK;
+
+  /* Activate SPI SS with SINGLE-IO */
+  retval = activate_spi_ss(target, base, spi_ss);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to activate SPI SS");
+    return retval;
+  }
+
+  LOG_DEBUG("Request Configuration Register\n");
+
+  retval = target_write_u32(target, SCOBCA1_FPGA_NORFLASH_QSPI_TDR(base), 0x35);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to send QUAD Page program instruction");
+    return retval;
+  }
+
+  retval = wait_qspi_idle(target, base, SPI_CMD_TIMEOUT);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to wait for QSPI to become idle");
+    return retval;
+  }
+
+  /* Read Memory data (2byte) adn Verify */
+
+  if (!read_and_verify_rx_data(target, base, exp_size, exp_val)) {
+    LOG_ERROR("Failed to read and verify RX data");
+    return ERROR_FAIL;
+  }
+
+  /* Inactive SPI SS */
+  retval = inactivate_spi_ss(target, base);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to inactivate SPI SS");
+    return retval;
+  }
+
+  /* Confirm SPI Control is Done */
+  if (!is_qspi_control_done(target, base)) {
+    LOG_ERROR("Confirm SPI Control is Done failed");
+    return ERROR_FAIL;
+  }
+
+  return retval;
+}
+
+static int set_quad_io_mode(struct target *target, uint32_t base,
+                            uint32_t spi_ss) {
+  int retval = ERROR_OK;
+
+  /* Activate SPI SS with SINGLE-IO */
+  retval = activate_spi_ss(target, base, spi_ss);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to activate SPI SS");
+    return retval;
+  }
+
+  LOG_INFO("Set QUAD I/O mode to configuration register\n");
+
+  retval = target_write_u32(target, SCOBCA1_FPGA_NORFLASH_QSPI_TDR(base), 0x01);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to send QUAD Page program instruction");
+    return retval;
+  }
+
+  retval = target_write_u32(target, SCOBCA1_FPGA_NORFLASH_QSPI_TDR(base), 0x00);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to send QUAD Page program instruction");
+    return retval;
+  }
+
+  retval = target_write_u32(target, SCOBCA1_FPGA_NORFLASH_QSPI_TDR(base), 0x02);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to send QUAD Page program instruction");
+    return retval;
+  }
+
+  retval = wait_qspi_idle(target, base, SPI_CMD_TIMEOUT);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to wait for QSPI to become idle");
+    return retval;
+  }
+  /* Inactive SPI SS */
+  retval = inactivate_spi_ss(target, base);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to inactivate SPI SS");
+    return retval;
+  }
+
+  /* Confirm SPI Control is Done */
+  if (!is_qspi_control_done(target, base)) {
+    LOG_ERROR("Confirm SPI Control is Done failed");
+    return ERROR_FAIL;
+  }
+
+  return retval;
+}
+
+static bool verify_quad_io_mode(struct target *target, uint32_t base,
+                                uint32_t spi_ss) {
+  uint32_t exp_quad_mode[2] = {0x02, 0x02};
+  int retval = ERROR_OK;
+
+  retval = verify_config_register(target, base, spi_ss,
+                                  ARRAY_SIZE(exp_quad_mode), exp_quad_mode);
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to verify QUAD I/O mode");
+    return retval;
+  }
+
+  return retval;
+}
+
+static int write_data_to_flash(struct target *target, uint32_t base,
+                               const uint8_t *data, uint8_t size) {
+  for (uint32_t i = 0; i < size; i++) {
+    int retval =
+        target_write_u8(target, SCOBCA1_FPGA_NORFLASH_QSPI_TDR(base), data[i]);
+    if (retval != ERROR_OK)
+      return retval;
+  }
+  return ERROR_OK;
+}
+
+static int scqspi_memory_data_quad_write(struct target *target, uint32_t base,
+                                         uint32_t spi_ss, uint32_t mem_addr,
+                                         uint8_t write_size,
+                                         const uint8_t *write_data) {
+  int retval = ERROR_OK;
+
+  /* Activate SPI SS with SINGLE-IO */
+  retval = activate_spi_ss(target, base, spi_ss);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to activate SPI SS");
+    return retval;
+  }
+
+  LOG_DEBUG("Send QUAD Page program instruction\n");
+
+  retval = target_write_u32(target, SCOBCA1_FPGA_NORFLASH_QSPI_TDR(base), 0x34);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to send QUAD Page program instruction");
+    return retval;
+  }
+
+  LOG_DEBUG("Send Memory Address (4byte)\n");
+  retval = write_mem_addr_to_flash(target, base, mem_addr);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to write memory address to flash");
+    return retval;
+  }
+
+  retval = wait_qspi_idle(target, base, SPI_CMD_TIMEOUT);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to wait for QSPI to become idle");
+    return retval;
+  }
+
+  LOG_DEBUG("Activate SPI SS with Quad-IO SPI Mode\n");
+
+  retval = target_write_u32(target, SCOBCA1_FPGA_NORFLASH_QSPI_ACR(base),
+                            QSPI_SPI_MODE_QUAD + spi_ss);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to activate SPI SS with Quad-IO SPI Mode");
+    return retval;
+  }
+
+  /* Write data */
+  retval = write_data_to_flash(target, base, write_data, write_size);
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to write data to flash");
+    return retval;
+  }
+
+  retval = wait_qspi_idle(target, base, SPI_CMD_TIMEOUT);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to wait for QSPI to become idle");
+    return retval;
+  }
+
+  /* Inactive SPI SS */
+  retval = inactivate_spi_ss(target, base);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to inactivate SPI SS");
+    return retval;
+  }
+
+  return retval;
+}
+
+static int write_data(struct flash_bank *bank, const uint8_t *buffer,
+                      uint32_t offset, uint32_t count) {
+  struct target *target = bank->target;
+  struct scqspi_flash_bank *scqspi_info = bank->driver_priv;
+  int retval = ERROR_OK;
+  uint32_t mem_addr = offset;
+  uint32_t remaining = count;
+
+  retval = set_quad_io_mode(target, scqspi_info->io_base, scqspi_info->spi_ss);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to set QUAD I/O mode");
+    return retval;
+  }
+
+  alive_sleep(1000);
+
+  retval =
+      verify_quad_io_mode(target, scqspi_info->io_base, scqspi_info->spi_ss);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to verify QUAD I/O mode");
+    return retval;
+  }
+
+  while (remaining > 0) {
+    uint32_t chunk_size =
+        remaining > QSPI_RX_FIFO_MAX_BYTE ? QSPI_RX_FIFO_MAX_BYTE : remaining;
+
+    LOG_DEBUG("Set to `Write Enable'\n");
+    retval =
+        set_write_enable(target, scqspi_info->io_base, scqspi_info->spi_ss);
+
+    if (retval != ERROR_OK) {
+      LOG_ERROR("Failed to set write enable");
+      return retval;
+    }
+
+    LOG_DEBUG("Write Data (QUAD Mode)\n");
+
+    retval = scqspi_memory_data_quad_write(
+        target, scqspi_info->io_base, scqspi_info->spi_ss, mem_addr, chunk_size,
+        (buffer + (mem_addr - offset)));
+
+    if (retval != ERROR_OK) {
+      LOG_ERROR("Failed to write data to flash at address 0x%08x", mem_addr);
+      return retval;
+    }
+
+    mem_addr += QSPI_RX_FIFO_MAX_BYTE;
+
+    alive_sleep(10);
+
+    retval =
+        verify_write_disable(target, scqspi_info->io_base, scqspi_info->spi_ss);
+
+    if (retval != ERROR_OK) {
+      LOG_ERROR("Failed to verify write disable after writing data");
+      return retval;
+    }
+
+    mem_addr += chunk_size;
+    remaining -= chunk_size;
+  }
+
+  return retval;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Command handler functions                                                 */
 /* ------------------------------------------------------------------------- */
@@ -831,8 +1109,51 @@ static int scqspi_erase(struct flash_bank *bank, unsigned int first,
 
 static int scqspi_write(struct flash_bank *bank, const uint8_t *buffer,
                         uint32_t offset, uint32_t count) {
+  struct target *target = bank->target;
+  struct scqspi_flash_bank *scqspi_info = bank->driver_priv;
+  int retval = ERROR_OK;
+
   LOG_INFO("%s", __func__);
-  return ERROR_OK;
+
+  LOG_DEBUG("%s: offset=0x%08" PRIx32 " count=0x%08" PRIx32, __func__, offset,
+            count);
+
+  if (target->state != TARGET_HALTED) {
+    LOG_ERROR("Target not halted");
+    return ERROR_TARGET_NOT_HALTED;
+  }
+
+  if (!(scqspi_info->probed)) {
+    LOG_ERROR("Flash bank not probed");
+    return ERROR_FLASH_BANK_NOT_PROBED;
+  }
+
+  if (offset + count > bank->size) {
+    LOG_WARNING("Write beyond end of flash. Extra data discarded.");
+    count = bank->size - offset;
+  }
+
+  /* Check sector protection */
+  for (unsigned int sector = 0; sector < bank->num_sectors; sector++) {
+    /* Start offset in or before this sector? */
+    /* End offset in or behind this sector? */
+    struct flash_sector *bs = &bank->sectors[sector];
+
+    if ((offset < (bs->offset + bs->size)) &&
+        ((offset + count - 1) >= bs->offset) && bs->is_protected) {
+      LOG_ERROR("Flash sector %u protected", sector);
+      return ERROR_FAIL;
+    }
+  }
+
+  retval = write_data(bank, buffer, offset, count);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to write data to flash");
+    return retval;
+  }
+
+  return retval;
 }
 
 static int scqspi_read(struct flash_bank *bank, uint8_t *buffer,
