@@ -16,6 +16,9 @@
 
 /* Timeout in ms */
 #define SPI_CMD_TIMEOUT (100)
+/* Erase sector waiting time, since erasing a sector can take some time we wait
+ * until the possible end */
+#define QSPI_ERASE_SECTOR_WAIT 800
 
 /**
  * struct scqspi_flash_bank - Represents a NOR flash bank for SCQSPI interface.
@@ -449,6 +452,274 @@ static int scqspi_read_id(struct flash_bank *bank, uint32_t *id) {
   return ERROR_OK;
 }
 
+static bool read_and_verify_rx_data(struct target *target, uint32_t base,
+                                    size_t exp_size, uint32_t *exp_val) {
+  int retval;
+  uint32_t rdata;
+
+  /* Reset QSPI FIFO */
+  retval = reset_qspi_fifo(target, base);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to reset QSPI FIFO");
+    return false;
+  }
+
+  LOG_DEBUG("Request RX FIFO %ld byte\n", exp_size);
+
+  for (unsigned i = 0; i < exp_size; i++) {
+    retval =
+        target_write_u32(target, SCOBCA1_FPGA_NORFLASH_QSPI_RDR(base), 0x00);
+
+    if (retval != ERROR_OK)
+      return retval;
+  }
+
+  retval = wait_qspi_idle(target, base, SPI_CMD_TIMEOUT);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to wait for QSPI to become idle");
+    return retval;
+  }
+
+  LOG_DEBUG("Read RX FIFO %ld byte and verify the value\n", exp_size);
+
+  for (unsigned i = 0; i < exp_size; i++) {
+    retval =
+        target_read_u32(target, SCOBCA1_FPGA_NORFLASH_QSPI_RDR(base), &rdata);
+
+    if (retval != ERROR_OK) {
+      LOG_ERROR("Failed to read RX FIFO %d byte", i);
+      return false;
+    }
+
+    if (exp_val[i] != rdata) {
+      LOG_ERROR("Read RX FIFO %d byte failed: expected 0x%08x, got 0x%08x", i,
+                exp_val[i], rdata);
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static int verify_status_register1(struct target *target, uint32_t base,
+                                   uint32_t spi_ss, size_t exp_size,
+                                   uint32_t *exp_val) {
+  int retval;
+
+  /* Activate SPI SS with SINGLE-IO */
+  retval = activate_spi_ss(target, base, spi_ss);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to activate SPI SS");
+    return retval;
+  }
+
+  LOG_DEBUG("Request Status Register\n");
+
+  retval = target_write_u32(target, SCOBCA1_FPGA_NORFLASH_QSPI_TDR(base),
+                            SPIFLASH_READ_STATUS);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to write SPIFLASH_READ_STATUS command");
+    return retval;
+  }
+
+  retval = wait_qspi_idle(target, base, SPI_CMD_TIMEOUT);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to wait for QSPI to become idle");
+    return retval;
+  }
+
+  /* Read Memory data (2byte) adn Verify */
+
+  if (!read_and_verify_rx_data(target, base, exp_size, exp_val)) {
+    LOG_ERROR("Failed to read and verify RX data");
+    return ERROR_FAIL;
+  }
+
+  /* Inactive SPI SS */
+  retval = inactivate_spi_ss(target, base);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to inactivate SPI SS");
+    return retval;
+  }
+  /* Confirm SPI Control is Done */
+  if (!is_qspi_control_done(target, base)) {
+    LOG_ERROR("Confirm SPI Control is Done failed");
+    return ERROR_FAIL;
+  }
+
+  return retval;
+}
+
+static int verify_write_disable(struct target *target, uint32_t base,
+                                uint32_t spi_ss) {
+  LOG_DEBUG("Verify write dsable \n");
+
+  int retval = ERROR_OK;
+  uint32_t exp_write_disable[] = {0x00, 0x00};
+
+  retval = verify_status_register1(
+      target, base, spi_ss, ARRAY_SIZE(exp_write_disable), exp_write_disable);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Verify Status Register 1 failed");
+  }
+
+  return retval;
+}
+
+static int set_write_enable(struct target *target, uint32_t base,
+                            uint32_t spi_ss) {
+  int retval = ERROR_OK;
+  uint32_t exp_write_enable[] = {0x02, 0x02};
+
+  /* Activate SPI SS with SINGLE-IO */
+  retval = activate_spi_ss(target, base, spi_ss);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to activate SPI SS");
+    return retval;
+  }
+
+  LOG_DEBUG("Set `Write Enable` (Instructure:0x06) \n");
+
+  retval = target_write_u32(target, SCOBCA1_FPGA_NORFLASH_QSPI_TDR(base),
+                            SPIFLASH_WRITE_ENABLE);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to write SPIFLASH_WRITE_ENABLE command");
+    return retval;
+  }
+
+  /* Inactive SPI SS */
+  retval = inactivate_spi_ss(target, base);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to inactivate SPI SS");
+    return retval;
+  }
+
+  /* Confirm SPI Control is Done */
+  if (!is_qspi_control_done(target, base)) {
+    LOG_ERROR("Confirm SPI Control is Done failed");
+    return ERROR_FAIL;
+  }
+
+  retval = verify_status_register1(
+      target, base, spi_ss, ARRAY_SIZE(exp_write_enable), exp_write_enable);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Verify Status Register failed");
+    return retval;
+  }
+
+  return retval;
+}
+
+/* Write a 4 bytes address memmory to flash */
+static int write_mem_addr_to_flash(struct target *target, uint32_t base,
+                                   uint32_t mem_addr) {
+  int retval = ERROR_OK;
+
+  for (int i = 3; i >= 0; --i) {
+    uint8_t byte = (mem_addr >> (i * 8)) & 0xFF;
+    retval =
+        target_write_u32(target, SCOBCA1_FPGA_NORFLASH_QSPI_TDR(base), byte);
+
+    if (retval != ERROR_OK) {
+      LOG_ERROR("Failed to write byte %d of Memory Address: 0x%08x", i,
+                mem_addr);
+      return retval;
+    }
+  }
+
+  return retval;
+}
+
+static int erase_sector(struct flash_bank *bank, unsigned int sector) {
+  struct target *target = bank->target;
+  struct scqspi_flash_bank *scqspi_info = bank->driver_priv;
+  int retval = ERROR_OK;
+  uint8_t erase_cmd = 0xDC; // Block Erase 64kb
+  /* Currently working with address 4 bytes */
+  uint32_t mem_addr = bank->sectors[sector].offset;
+
+  /* Activate SPI SS with SINGLE-IO */
+  retval = activate_spi_ss(target, scqspi_info->io_base, scqspi_info->spi_ss);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to activate SPI SS");
+    return retval;
+  }
+
+  LOG_DEBUG("Send Erase command : 0x%02x (Block 64kb)\n", erase_cmd);
+
+  retval = target_write_u8(
+      target, SCOBCA1_FPGA_NORFLASH_QSPI_TDR(scqspi_info->io_base), erase_cmd);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to write Erase command");
+    return retval;
+  }
+
+  LOG_INFO("Send Memory Address (4byte) : mem_addr : 0x%08x\n", mem_addr);
+
+  retval = write_mem_addr_to_flash(target, scqspi_info->io_base, mem_addr);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to write 4 bytes Memory Address");
+    return retval;
+  }
+
+  retval = wait_qspi_idle(target, scqspi_info->io_base, SPI_CMD_TIMEOUT);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to wait for QSPI to become idle");
+    return retval;
+  }
+
+  /* Inactive SPI SS */
+  retval = inactivate_spi_ss(target, scqspi_info->io_base);
+
+  if (retval != ERROR_OK) {
+    LOG_ERROR("Failed to inactivate SPI SS");
+    return retval;
+  }
+
+  return retval;
+}
+
+static int qspi_erase_sector(struct flash_bank *bank, unsigned int sector) {
+  struct target *target = bank->target;
+  struct scqspi_flash_bank *scqspi_info = bank->driver_priv;
+  int retval = ERROR_OK;
+
+  retval = set_write_enable(target, scqspi_info->io_base, scqspi_info->spi_ss);
+
+  if (retval != ERROR_OK)
+    return retval;
+
+  retval = erase_sector(bank, sector);
+
+  if (retval != ERROR_OK)
+    return retval;
+
+  alive_sleep(QSPI_ERASE_SECTOR_WAIT);
+
+  retval =
+      verify_write_disable(target, scqspi_info->io_base, scqspi_info->spi_ss);
+
+  if (retval != ERROR_OK)
+    return retval;
+
+  return retval;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Command handler functions                                                 */
 /* ------------------------------------------------------------------------- */
@@ -482,7 +753,54 @@ FLASH_BANK_COMMAND_HANDLER(scqspi_flash_bank_command) {
 static int scqspi_erase(struct flash_bank *bank, unsigned int first,
                         unsigned int last) {
   LOG_INFO("%s", __func__);
-  return ERROR_OK;
+
+  struct target *target = bank->target;
+  struct scqspi_flash_bank *scqspi_info = bank->driver_priv;
+  unsigned int sector;
+  int retval = ERROR_OK;
+
+  LOG_DEBUG("%s: from sector %u to sector %u", __func__, first, last);
+
+  if (target->state != TARGET_HALTED) {
+    LOG_ERROR("Target not halted");
+    return ERROR_TARGET_NOT_HALTED;
+  }
+
+  if (!(scqspi_info->probed)) {
+    LOG_ERROR("Flash bank not probed");
+    return ERROR_FLASH_BANK_NOT_PROBED;
+  }
+
+  if (scqspi_info->dev.erase_cmd == 0x00) {
+    LOG_ERROR("Sector erase not available for this device");
+    return ERROR_FLASH_OPER_UNSUPPORTED;
+  }
+
+  if ((last < first) || (last >= bank->num_sectors)) {
+    LOG_ERROR("Flash sector invalid");
+    return ERROR_FLASH_SECTOR_INVALID;
+  }
+
+  for (sector = first; sector <= last; sector++) {
+    if (bank->sectors[sector].is_protected) {
+      LOG_ERROR("Flash sector %u protected", sector);
+      return ERROR_FLASH_PROTECTED;
+    }
+
+    LOG_INFO("Flash sector %u offset %d", sector, bank->sectors[sector].offset);
+  }
+
+  for (sector = first; sector <= last; sector++) {
+    retval = qspi_erase_sector(bank, sector);
+    if (retval != ERROR_OK) {
+      LOG_ERROR("Flash sector_erase failed on sector %u", sector);
+      break;
+    }
+    alive_sleep(10);
+    keep_alive();
+  }
+
+  return retval;
 }
 
 static int scqspi_write(struct flash_bank *bank, const uint8_t *buffer,
