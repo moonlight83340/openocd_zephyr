@@ -961,6 +961,20 @@ static int scqspi_info(struct flash_bank *bank,
   return ERROR_OK;
 }
 
+static int scqspi_protect(struct flash_bank *bank, int set, unsigned int first,
+                          unsigned int last) {
+  unsigned int sector;
+
+  for (sector = first; sector <= last; sector++)
+    bank->sectors[sector].is_protected = set;
+
+  if (set)
+    LOG_WARNING("setting soft protection only, not related to flash's hardware "
+                "write protection");
+
+  return ERROR_OK;
+}
+
 static int scqspi_protect_check(struct flash_bank *bank) {
   /* Nothing to do. Protection is only handled in SW. */
   return ERROR_OK;
@@ -991,6 +1005,7 @@ const struct flash_driver scqspi_flash = {
     .commands = scqspi_command_handlers,
     .flash_bank_command = scqspi_flash_bank_command,
     .erase = scqspi_erase,
+    .protect = scqspi_protect,
     .write = scqspi_write,
     .read = scqspi_read,
     .verify = scqspi_verify,
