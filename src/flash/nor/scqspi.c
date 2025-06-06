@@ -75,13 +75,45 @@ static int scqspi_probe(struct flash_bank *bank) {
 }
 
 static int scqspi_auto_probe(struct flash_bank *bank) {
-  LOG_INFO("%s", __func__);
-  return ERROR_OK;
+  struct scqspi_flash_bank *scqspi_info = bank->driver_priv;
+
+  LOG_DEBUG("%s\n", __func__);
+
+  if (scqspi_info->probed)
+    return ERROR_OK;
+
+  return scqspi_probe(bank);
+  ;
 }
 
 static int scqspi_info(struct flash_bank *bank,
                        struct command_invocation *cmd) {
-  LOG_INFO("%s", __func__);
+  struct scqspi_flash_bank *scqspi_info = bank->driver_priv;
+
+  LOG_DEBUG("%s", __func__);
+
+  if (!(scqspi_info->probed)) {
+    command_print_sameline(cmd, "\nQSPI flash bank not probed yet\n");
+    return ERROR_FLASH_BANK_NOT_PROBED;
+  }
+
+  command_print_sameline(
+      cmd,
+      "flash \'%s\', device id = 0x%06" PRIx32 ", flash size = %" PRIu32
+      "%sB\n(page size = %" PRIu32 ", read = 0x%02" PRIx8
+      ", qread = 0x%02" PRIx8 ", pprog = 0x%02" PRIx8
+      ", mass_erase = 0x%02" PRIx8 ", sector size = %" PRIu32
+      " %sB, sector_erase = 0x%02" PRIx8 ")",
+      scqspi_info->dev.name, scqspi_info->dev.device_id,
+      bank->size / 4096 ? bank->size / 1024 : bank->size,
+      bank->size / 4096 ? "Ki" : "", scqspi_info->dev.pagesize,
+      scqspi_info->dev.read_cmd, scqspi_info->dev.qread_cmd,
+      scqspi_info->dev.pprog_cmd, scqspi_info->dev.chip_erase_cmd,
+      scqspi_info->dev.sectorsize / 4096 ? scqspi_info->dev.sectorsize / 1024
+                                         : scqspi_info->dev.sectorsize,
+      scqspi_info->dev.sectorsize / 4096 ? "Ki" : "",
+      scqspi_info->dev.erase_cmd);
+
   return ERROR_OK;
 }
 
