@@ -17,6 +17,20 @@
 /* Timeout in ms */
 #define SPI_CMD_TIMEOUT (100)
 
+/**
+ * struct scqspi_flash_bank - Represents a NOR flash bank for SCQSPI interface.
+ *
+ * @target: Pointer to the target structure associated with the flash bank.
+ * @probed: Boolean flag indicating whether the flash bank has been probed.
+ * @io_base: Base address for I/O operations on the flash bank.
+ * @spi_ss: SPI slave select identifier for the flash bank.
+ * @dev: Flash device structure containing device-specific information.
+ *
+ * This structure is used to manage and interact with a NOR flash bank
+ * connected via the SCQSPI interface. It holds essential information
+ * about the target, probing status, I/O base address, SPI slave select,
+ * and the flash device details.
+ */
 struct scqspi_flash_bank {
   struct target *target;
   bool probed;
@@ -24,6 +38,10 @@ struct scqspi_flash_bank {
   uint8_t spi_ss;
   struct flash_device dev;
 };
+
+/* ------------------------------------------------------------------------- */
+/* Command handler functions                                                 */
+/* ------------------------------------------------------------------------- */
 
 /* flash bank scqspi <base> <size> <chip_width> <bus_width> <target#>
  * <io_base> <driverPath>
