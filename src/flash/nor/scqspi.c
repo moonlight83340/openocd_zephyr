@@ -627,6 +627,12 @@ static int scqspi_flash_blank_check(struct flash_bank *bank) {
   return ERROR_OK;
 }
 
+static int scqspi_verify(struct flash_bank *bank, const uint8_t *buffer,
+                         uint32_t offset, uint32_t count) {
+  /* Not implemented */
+  return ERROR_OK;
+}
+
 static const struct command_registration scqspi_command_handlers[] = {
     {
         .name = "scqspi",
@@ -643,6 +649,7 @@ const struct flash_driver scqspi_flash = {
     .erase = scqspi_erase,
     .write = scqspi_write,
     .read = scqspi_read,
+    .verify = scqspi_verify,
     .probe = scqspi_probe,
     .auto_probe = scqspi_auto_probe,
     .erase_check = scqspi_flash_blank_check,
