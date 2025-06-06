@@ -11,6 +11,8 @@
 #include "spi.h"
 
 #define QSPI_DATA_MEM0_SS (0x01)
+#define QSPI_CFG_MEM0		   (0u)
+#define QSPI_CFG_MEM1		   (1u)
 #define QSPI_ASR_IDLE (0x00)
 #define QSPI_ASR_BUSY (0x01)
 #define QSPI_RX_FIFO_MAX_BYTE (16u)

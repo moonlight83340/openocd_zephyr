@@ -39,6 +39,7 @@ struct scqspi_flash_bank {
   bool probed;
   uint32_t io_base;
   uint8_t spi_ss;
+  uint8_t mem_no;
   struct flash_device dev;
 };
 
@@ -264,34 +265,58 @@ static int clear_status_register(struct target *target, uint32_t base,
  * @param target Pointer to the target structure representing the device.
  * @param base Base address (unused in this function, but may be relevant for
  * future extensions).
+ * @param mem_no Memory number to select
  *
  * @return Returns ERROR_OK on success, or an error code if the operation fails.
  *
  * Currently we select the config memory 0  by default
  */
-static int select_mem(struct target *target, uint32_t base) {
+static int select_mem(struct target *target, uint32_t base, uint8_t mem_no) {
   uint8_t val;
   int retval;
 
   /* Config Memory is switched by CFGMEMSEL */
-  LOG_DEBUG("Select Config Memory 0\n");
-  retval = target_write_u8(target, SCOBCA1_FPGA_SYSREG_CFGMEMCTL, 0x00);
 
-  if (retval != ERROR_OK) {
-    LOG_ERROR("Failed to write config memory\n");
-    return retval;
-  }
+  if (mem_no == QSPI_CFG_MEM0) {
+    LOG_DEBUG("Select Config Memory 0\n");
+    retval = target_write_u8(target, SCOBCA1_FPGA_SYSREG_CFGMEMCTL, 0x00);
 
-  retval = target_read_u8(target, SCOBCA1_FPGA_SYSREG_CFGMEMCTL, &val);
+    if (retval != ERROR_OK) {
+      LOG_ERROR("Failed to write config memory 0\n");
+      return retval;
+    }
 
-  if (retval != ERROR_OK) {
-    LOG_ERROR("Failed to read config memory\n");
-    return retval;
-  }
+    retval = target_read_u8(target, SCOBCA1_FPGA_SYSREG_CFGMEMCTL, &val);
 
-  if (val != 0x00) {
-    LOG_ERROR("Can not select Config Memory %d != 0x00\n", val);
-    return ERROR_FAIL;
+    if (retval != ERROR_OK) {
+      LOG_ERROR("Failed to read config memory 0\n");
+      return retval;
+    }
+
+    if (val != 0x00) {
+      LOG_ERROR("Can not select Config Memory 0 %d != 0x00\n", val);
+      return ERROR_FAIL;
+    }
+  } else {
+    LOG_DEBUG("Select Config Memory 1\n");
+    retval = target_write_u8(target, SCOBCA1_FPGA_SYSREG_CFGMEMCTL, 0x10);
+
+    if (retval != ERROR_OK) {
+      LOG_ERROR("Failed to write config memory 1\n");
+      return retval;
+    }
+
+    retval = target_read_u8(target, SCOBCA1_FPGA_SYSREG_CFGMEMCTL, &val);
+
+    if (retval != ERROR_OK) {
+      LOG_ERROR("Failed to read config memory 1\n");
+      return retval;
+    }
+
+    if (val != 0x30) {
+      LOG_ERROR("Can not select Config Memory 1 %d != 0x30\n", val);
+      return ERROR_FAIL;
+    }
   }
 
   return retval;
@@ -315,7 +340,7 @@ static int scqspi_init(struct flash_bank *bank) {
 
   LOG_DEBUG("%s", __func__);
 
-  retval = select_mem(target, scqspi_info->io_base);
+  retval = select_mem(target, scqspi_info->io_base, scqspi_info->mem_no);
   if (retval != ERROR_OK) {
     LOG_ERROR("Failed to select memory\n");
     return retval;
@@ -732,7 +757,7 @@ FLASH_BANK_COMMAND_HANDLER(scqspi_flash_bank_command) {
 
   LOG_DEBUG("%s", __func__);
 
-  if (CMD_ARGC < 7)
+  if (CMD_ARGC < 8)
     return ERROR_COMMAND_SYNTAX_ERROR;
 
   scqspi_info = malloc(sizeof(struct scqspi_flash_bank));
@@ -744,6 +769,7 @@ FLASH_BANK_COMMAND_HANDLER(scqspi_flash_bank_command) {
   bank->driver_priv = scqspi_info;
   scqspi_info->probed = false;
   COMMAND_PARSE_NUMBER(u32, CMD_ARGV[6], scqspi_info->io_base);
+  COMMAND_PARSE_NUMBER(u8, CMD_ARGV[7], scqspi_info->mem_no);
   /* Default to SPI SS 1 (Config memory 0) */
   scqspi_info->spi_ss = 0x01;
 
