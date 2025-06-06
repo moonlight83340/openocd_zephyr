@@ -26,10 +26,28 @@ struct scqspi_flash_bank {
 };
 
 /* flash bank scqspi <base> <size> <chip_width> <bus_width> <target#>
- * <driverPath>
+ * <io_base> <driverPath>
  */
 FLASH_BANK_COMMAND_HANDLER(scqspi_flash_bank_command) {
-  LOG_INFO("%s", __func__);
+  struct scqspi_flash_bank *scqspi_info;
+
+  LOG_DEBUG("%s", __func__);
+
+  if (CMD_ARGC < 7)
+    return ERROR_COMMAND_SYNTAX_ERROR;
+
+  scqspi_info = malloc(sizeof(struct scqspi_flash_bank));
+  if (!scqspi_info) {
+    LOG_ERROR("not enough memory");
+    return ERROR_FAIL;
+  }
+
+  bank->driver_priv = scqspi_info;
+  scqspi_info->probed = false;
+  COMMAND_PARSE_NUMBER(u32, CMD_ARGV[6], scqspi_info->io_base);
+  /* Default to SPI SS 1 (Config memory 0) */
+  scqspi_info->spi_ss = 0x01;
+
   return ERROR_OK;
 }
 
