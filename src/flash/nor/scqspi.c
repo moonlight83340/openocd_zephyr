@@ -88,7 +88,8 @@ struct scqspi_flash_bank {
 /* Internal helper functions for scqspi flash driver implementation          */
 /* ------------------------------------------------------------------------- */
 
-static bool verify(struct target *target, uint32_t addr, uint32_t exp, uint32_t retry)
+static bool verify(struct target *target, uint32_t addr, uint32_t exp, uint32_t mask,
+		   uint32_t retry)
 {
 	uint32_t val;
 	int32_t ret;
@@ -100,7 +101,7 @@ static bool verify(struct target *target, uint32_t addr, uint32_t exp, uint32_t 
 			break;
 		}
 
-		if (val == exp) {
+		if ((val & mask) == exp) {
 			LOG_DEBUG("read32  [0x%08X] 0x%08x (exp:0x%08x) (retry:%d)", addr, val, exp,
 				  i + 1);
 			return true;
@@ -124,7 +125,8 @@ static bool is_qspi_control_done(struct target *target)
 
 	LOG_DEBUG("Confirm QSPI Interrupt Status is `SPI Control Done`");
 
-	if (!verify(target, SCOBCA1_FPGA_NORFLASH_QSPI_ISR, 0x01, SCQSPI_REG_READ_RETRY(10))) {
+	if (!verify(target, SCOBCA1_FPGA_NORFLASH_QSPI_ISR, 0x01, 0xFFFFFFFF,
+		    SCQSPI_REG_READ_RETRY(10))) {
 		LOG_ERROR("Confirm QSPI Interrupt Status failed");
 		return false;
 	}
@@ -136,7 +138,8 @@ static bool is_qspi_control_done(struct target *target)
 		return false;
 	}
 
-	if (!verify(target, SCOBCA1_FPGA_NORFLASH_QSPI_ISR, 0x00, SCQSPI_REG_READ_RETRY(10))) {
+	if (!verify(target, SCOBCA1_FPGA_NORFLASH_QSPI_ISR, 0x00, 0xFFFFFFFF,
+		    SCQSPI_REG_READ_RETRY(10))) {
 		LOG_ERROR("Failed to read QSPI Interrupt Status");
 		return false;
 	}
@@ -148,7 +151,7 @@ static bool is_qspi_idle(struct target *target)
 {
 	LOG_DEBUG("Confirm QSPI Access Status is `Idle`");
 
-	if (!verify(target, SCOBCA1_FPGA_NORFLASH_QSPI_ASR, SCQSPI_ASR_IDLE,
+	if (!verify(target, SCOBCA1_FPGA_NORFLASH_QSPI_ASR, SCQSPI_ASR_IDLE, 0xFFFFFFFF,
 		    SCQSPI_REG_READ_RETRY(10))) {
 		LOG_ERROR("QSPI (Config Memory) is busy");
 		return false;
@@ -303,7 +306,8 @@ static int select_mem(struct target *target, uint8_t mem_no)
 		goto end;
 	}
 
-	if (!verify(target, SCOBCA1_SYSREG_CFGMEMCTL, expval, SCQSPI_REG_READ_RETRY(1000))) {
+	if (!verify(target, SCOBCA1_SYSREG_CFGMEMCTL, expval, expval,
+		    SCQSPI_REG_READ_RETRY(1000))) {
 		LOG_ERROR("Failed to select Config Memory %d", mem_no);
 		ret = ERROR_FAIL;
 	}
